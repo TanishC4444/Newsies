@@ -54,7 +54,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install feedparser playwright
-          # CPU-only build with OpenBLAS for speed
+          sudo apt-get update && sudo apt-get install -y libopenblas-dev
           CMAKE_ARGS="-DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS" \
             pip install llama-cpp-python --no-cache-dir
           playwright install chromium
