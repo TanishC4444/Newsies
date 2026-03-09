@@ -2,7 +2,7 @@ name: Newsbrief Pipeline
 
 on:
   schedule:
-    - cron: "0 6 * * *"     # daily 6:00 UTC (midnight CST)
+    - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
       feed_url:
@@ -12,7 +12,7 @@ on:
       max_articles:
         description: "Max articles (0 = all)"
         required: false
-        default: "10"
+        default: "1"
       skip_long:
         description: "Skip long summaries"
         required: false
@@ -41,7 +41,6 @@ jobs:
         with:
           python-version: "3.11"
 
-      # ── PIP CACHE ─────────────────────────────────────────────────────
       - name: Cache pip packages
         uses: actions/cache@v4
         with:
@@ -49,7 +48,6 @@ jobs:
           key: pip-${{ runner.os }}-v1
           restore-keys: pip-${{ runner.os }}-
 
-      # ── INSTALL DEPS ──────────────────────────────────────────────────
       - name: Install dependencies
         run: |
           pip install --upgrade pip
@@ -60,8 +58,6 @@ jobs:
           playwright install chromium
           playwright install-deps chromium
 
-      # ── MODEL CACHE ───────────────────────────────────────────────────
-      # ~5.1 GB cached after first run. GitHub allows 10 GB per repo.
       - name: Cache Mistral-7B model
         id: model-cache
         uses: actions/cache@v4
@@ -69,7 +65,6 @@ jobs:
           path: ${{ env.MODEL_DIR }}/${{ env.MODEL_NAME }}
           key: model-${{ env.MODEL_NAME }}
 
-      # ── DOWNLOAD MODEL (cache miss only) ──────────────────────────────
       - name: Download Mistral-7B GGUF
         if: steps.model-cache.outputs.cache-hit != 'true'
         run: |
@@ -83,11 +78,10 @@ jobs:
       - name: Verify model
         run: ls -lh ${{ env.MODEL_DIR }}/${{ env.MODEL_NAME }}
 
-      # ── RUN ────────────────────────────────────────────────────────────
       - name: Run newsbrief
         run: |
           FEED="${{ github.event.inputs.feed_url || env.DEFAULT_FEED }}"
-          MAX="${{ github.event.inputs.max_articles || '10' }}"
+          MAX="${{ github.event.inputs.max_articles || '1' }}"
           SKIP_LONG="${{ github.event.inputs.skip_long }}"
 
           CMD="python newsbrief.py \"$FEED\" \
@@ -107,21 +101,9 @@ jobs:
           mkdir -p output
           eval $CMD
 
-      # ── UPLOAD RESULTS ────────────────────────────────────────────────
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
           name: newsbrief-${{ github.run_number }}
           path: output/
           retention-days: 30
-
-      # ── OPTIONAL: commit results back to repo ─────────────────────────
-      # - name: Commit results
-      #   run: |
-      #     git config user.name "github-actions[bot]"
-      #     git config user.email "github-actions[bot]@users.noreply.github.com"
-      #     mkdir -p reports
-      #     cp output/* reports/
-      #     git add reports/
-      #     git diff --staged --quiet || git commit -m "newsbrief $(date +%Y-%m-%d)"
-      #     git push

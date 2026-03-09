@@ -2,8 +2,8 @@
 newsbrief.py - RSS scraper + local Mistral-7B NLP summaries in one file.
 
 Usage:
-    python newsbrief.py                                          # default BBC ME feed
-    python newsbrief.py "https://feeds.bbci.co.uk/news/world/rss.xml"
+    python newsbrief.py                                          # default BBC ME feed, 1 article
+    python newsbrief.py "https://feeds.bbci.co.uk/news/world/rss.xml" --max 3
     python newsbrief.py "https://some-feed.xml" --max 5 --no-long --no-nlp
 
 Requires: feedparser, playwright, llama-cpp-python
@@ -115,13 +115,6 @@ UA = (
 
 def scrape_feed(feed_url, source_name="", category="", max_articles=0,
                 delay=0.5, verbose=False):
-    """
-    Parse RSS feed and scrape full article text from each entry.
-
-    Returns list of dicts with keys:
-        title, url, source, category, author, published, retrieved_at,
-        word_count, char_count, full_text, error
-    """
     import feedparser
     from playwright.sync_api import sync_playwright
 
@@ -213,14 +206,15 @@ def scrape_feed(feed_url, source_name="", category="", max_articles=0,
 
 DEFAULT_MODEL_PATH = os.environ.get(
     "NEWSBRIEF_MODEL_PATH",
-    "models/mistral-7b-instruct-v0.3.Q5_K_M.gguf",
+    "models/mistral-7b-instruct-v0.2.Q5_K_M.gguf",
 )
 
 # ---------------------------------------------------------------------------
-# SHORT SUMMARY: 3 sentences, pure specifics
+# PROMPTS - NO <s> prefix! llama-cpp adds BOS token automatically.
 # ---------------------------------------------------------------------------
+
 SHORT_PROMPT = """\
-<s>[INST] You are a senior news analyst. You produce razor-sharp 3-sentence \
+[INST] You are a senior news analyst. You produce razor-sharp 3-sentence \
 briefings used by policymakers. Every sentence must contain specifics: \
 names, numbers, dates, places. Never be vague.
 
@@ -247,11 +241,8 @@ Respond with ONLY this JSON, no markdown fences, no extra text:
 {{"headline_idea": "...", "importance": "...", "impact": "..."}}
 [/INST]"""
 
-# ---------------------------------------------------------------------------
-# LONG SUMMARY: deep analytical, structured
-# ---------------------------------------------------------------------------
 LONG_PROMPT = """\
-<s>[INST] You are an expert geopolitical and policy analyst writing deep-dive \
+[INST] You are an expert geopolitical and policy analyst writing deep-dive \
 briefings. You are analytical, never vague, always cite specifics from the \
 source material: names, titles, exact figures, dates, locations, and direct \
 policy language. Your analysis connects cause to effect.
@@ -330,9 +321,12 @@ def run_nlp(articles, model_path=DEFAULT_MODEL_PATH, n_ctx=8192,
         model_path=model_path,
         n_ctx=n_ctx,
         n_threads=os.cpu_count() or 4,
-        n_gpu_layers=0,       # CPU only for GitHub Actions
+        n_gpu_layers=0,
         verbose=False,
     )
+
+    if verbose:
+        print("Model loaded.")
 
     def generate(prompt, max_tokens=1200):
         result = llm(
@@ -350,13 +344,15 @@ def run_nlp(articles, model_path=DEFAULT_MODEL_PATH, n_ctx=8192,
             continue
 
         if verbose:
-            print(f"  [NLP {i}/{len(articles)}] {art['title'][:55]}...")
+            print(f"\n  [NLP {i}/{len(articles)}] {art['title'][:55]}...")
 
         m = art
         text_short = truncate_text(m["full_text"], n_ctx, 1500)
         text_long = truncate_text(m["full_text"], n_ctx, 2000)
 
         # --- short summary ---
+        if verbose:
+            print(f"    Generating short summary...", flush=True)
         prompt = SHORT_PROMPT.format(
             title=m["title"], source=m["source"], author=m["author"],
             published=m["published"], category=m["category"],
@@ -365,9 +361,13 @@ def run_nlp(articles, model_path=DEFAULT_MODEL_PATH, n_ctx=8192,
         raw = generate(prompt, max_tokens=500)
         art["short_summary"] = parse_json_safe(raw)
         art["short_summary"]["_raw"] = raw
+        if verbose:
+            print(f"    Short summary done.")
 
         # --- long summary ---
         if do_long:
+            if verbose:
+                print(f"    Generating long summary...", flush=True)
             prompt = LONG_PROMPT.format(
                 title=m["title"], source=m["source"], author=m["author"],
                 published=m["published"], category=m["category"],
@@ -376,6 +376,8 @@ def run_nlp(articles, model_path=DEFAULT_MODEL_PATH, n_ctx=8192,
             raw = generate(prompt, max_tokens=1200)
             art["long_summary"] = parse_json_safe(raw)
             art["long_summary"]["_raw"] = raw
+            if verbose:
+                print(f"    Long summary done.")
 
     return articles
 
@@ -385,6 +387,7 @@ def run_nlp(articles, model_path=DEFAULT_MODEL_PATH, n_ctx=8192,
 # =============================================================================
 
 def write_json(articles, path):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     data = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "article_count": len(articles),
@@ -395,6 +398,7 @@ def write_json(articles, path):
 
 
 def write_text(articles, path):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [f"NEWSBRIEF REPORT  {ts}", f"{'='*90}\n"]
 
@@ -453,8 +457,8 @@ def main():
     parser.add_argument("feed_url", nargs="?",
                         default="https://feeds.bbci.co.uk/news/world/middle_east/rss.xml",
                         help="RSS feed URL")
-    parser.add_argument("--max", "-m", type=int, default=0,
-                        help="Max articles (0 = all)")
+    parser.add_argument("--max", "-m", type=int, default=1,
+                        help="Max articles (default 1, 0 = all)")
     parser.add_argument("--model", type=str, default=DEFAULT_MODEL_PATH,
                         help="Path to GGUF model")
     parser.add_argument("--ctx", type=int, default=8192,
